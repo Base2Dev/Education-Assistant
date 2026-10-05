@@ -1,0 +1,12 @@
+node_modules/
+.reference/
+.pnpm-store/
+dist/
+.venv/
+__pycache__/
+.pytest_cache/
+.test-data/
+tmp/
+*.log
+docs/archive/
+artifacts/
