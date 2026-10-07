@@ -1,3 +1,4 @@
+// Modified / added lines: 1, 33-38 (Added openLink helper to launch URLs in external browser)
 let token = '';
 export function configureToken(value) { token = value; }
 export async function request(method, path, body) {
@@ -27,5 +28,10 @@ export async function exportNote(noteId) {
   const url = URL.createObjectURL(await response.blob());
   const link = document.createElement('a'); link.href = url; link.download = 'scholo-note.zip'; link.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+  return true;
+}
+export async function openLink(url) {
+  if (window.scholo?.openLink) return window.scholo.openLink(url);
+  window.open(url, '_blank');
   return true;
 }

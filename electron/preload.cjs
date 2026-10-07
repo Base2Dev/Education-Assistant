@@ -1,3 +1,4 @@
+// Modified / added lines: 1-11 (Expose openLink to renderer for opening saved links)
 const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('scholo', {
   request: (method, path, body) => ipcRenderer.invoke('scholo:request', { method, path, body }),
@@ -6,6 +7,7 @@ contextBridge.exposeInMainWorld('scholo', {
   desktopInfo: () => ipcRenderer.invoke('scholo:desktop-info'),
   chooseWorkspace: () => ipcRenderer.invoke('scholo:choose-workspace'),
   startCapture: () => ipcRenderer.invoke('scholo:start-capture'),
+  openLink: url => ipcRenderer.invoke('scholo:open-link', url),
   onCaptureSaved: callback => {
     const listener = (_event, note) => callback(note);
     ipcRenderer.on('scholo:capture-saved', listener);

@@ -1,4 +1,5 @@
-const { app, BrowserWindow, ipcMain, protocol, net, dialog, session, globalShortcut, Tray, Menu, nativeImage } = require('electron');
+// Modified / added lines: 1-2, 136-143 (Added shell import and scholo:open-link handler for opening saved links)
+const { app, BrowserWindow, ipcMain, protocol, net, dialog, session, globalShortcut, Tray, Menu, nativeImage, shell } = require('electron');
 const { spawn } = require('node:child_process');
 const { randomBytes } = require('node:crypto');
 const { createServer } = require('node:net');
@@ -132,6 +133,14 @@ app.whenReady().then(async () => {
     ipcMain.handle('scholo:desktop-info', event => { trusted(event); return { workspace: workspacePath, shortcut: 'Ctrl+Shift+Space', shortcutRegistered, captureActive: capture?.isActive() || false }; });
     ipcMain.handle('scholo:choose-workspace', event => { trusted(event); return chooseWorkspace(); });
     ipcMain.handle('scholo:start-capture', event => { trusted(event); return capture.start(); });
+    ipcMain.handle('scholo:open-link', async (event, url) => {
+      trusted(event);
+      if (typeof url === 'string' && /^https?:\/\//i.test(url)) {
+        await shell.openExternal(url);
+        return true;
+      }
+      return false;
+    });
     ipcMain.handle('scholo:export-note', async (event, noteId) => {
       trusted(event);
       if (!new RegExp(`^${uuid}$`).test(noteId)) throw new Error('Invalid note');

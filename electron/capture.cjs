@@ -1,9 +1,11 @@
+// Modified / added lines: 1-9, 36-39, 110-119, 126-155 (Integrated link action, OCR URL detection, and saved link persistence)
 const { BrowserWindow, desktopCapturer, screen, ipcMain } = require('electron');
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 const path = require('node:path');
 const fs = require('node:fs/promises');
 const { randomUUID } = require('node:crypto');
+const { resolveSourceContext, detectContentType, extractTopicAndTitle } = require('./source-resolver.cjs');
 const run = promisify(execFile);
 
 function cropRectangle(input, display, imageSize) {
@@ -32,13 +34,8 @@ function createCapture({ root, getWorkspace, chooseWorkspace, getPython, api, up
     overlay = popup = null; capturing = false;
   }
   async function sourceContext(point) {
-    try {
-      const pixel = screen.dipToScreenPoint(point);
-      const result = await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
-        path.join(__dirname, 'screen-context.ps1'), '-PointX', String(pixel.x), '-PointY', String(pixel.y)],
-        { windowsHide: true, timeout: 5000, maxBuffer: 64 * 1024 });
-      return JSON.parse(result.stdout.replace(/^\uFEFF/, ''));
-    } catch { return {}; }
+    const pixel = screen.dipToScreenPoint(point);
+    return resolveSourceContext(pixel, path.join(__dirname, 'screen-context.ps1'), 3500);
   }
   async function readText(image) {
     const directory = path.join(getWorkspace(), '.scholo', 'tmp');
@@ -110,6 +107,16 @@ function createCapture({ root, getWorkspace, chooseWorkspace, getPython, api, up
     const ocr = await readText(image);
     if (pending !== state) return;
     Object.assign(state, ocr);
+    const classification = detectContentType({ metadata, text: ocr.text, imageSize: image.getSize() });
+    const inferred = extractTopicAndTitle(metadata, ocr.text);
+    Object.assign(state, {
+      content_type: classification.contentType,
+      action: classification.action,
+      url: classification.url || metadata.url || null,
+      title: inferred.title,
+      course: inferred.course,
+      topic: inferred.topic,
+    });
     popup = new BrowserWindow({ width: 520, height: 820, minWidth: 440, minHeight: 600,
       title: 'File your capture', alwaysOnTop: true, autoHideMenuBar: true, webPreferences: options });
     restrict(popup);
@@ -118,23 +125,36 @@ function createCapture({ root, getWorkspace, chooseWorkspace, getPython, api, up
   });
   ipcMain.handle('capture:save', async (event, input) => {
     trusted(event, popup);
-    if (!pending || !['text', 'image', 'video'].includes(input?.action)) throw new Error('Invalid capture action');
+    const isLinkAction = ['link', 'video'].includes(input?.action);
+    if (!pending || (!['text', 'image'].includes(input?.action) && !isLinkAction)) throw new Error('Invalid capture action');
     if (input.action === 'text' && !input.text?.trim()) throw new Error('Review or enter the text before saving.');
+    if (isLinkAction && (!input.url || input.url === 'null')) throw new Error('Enter a valid URL before saving.');
     const state = pending;
     const citations = [];
-    if (input.action === 'video') {
-      const start = await api('POST', '/timestamps', { value: input.start });
-      const end = input.end ? await api('POST', '/timestamps', { value: input.end }) : null;
-      citations.push({ title: input.title, url: input.url, start_ms: start.milliseconds, end_ms: end?.milliseconds ?? null, comment: input.comment });
+    if (isLinkAction) {
+      let start_ms = 0;
+      let end_ms = null;
+      if (input.start) {
+        try {
+          const start = await api('POST', '/timestamps', { value: input.start });
+          start_ms = start.milliseconds;
+          if (input.end) {
+            const end = await api('POST', '/timestamps', { value: input.end });
+            end_ms = end.milliseconds;
+          }
+        } catch {}
+      }
+      citations.push({ title: input.title || 'Saved link', url: input.url, start_ms, end_ms, comment: input.comment || '' });
     }
     // Reuse a saved draft on retry, so an image-import failure cannot duplicate a note.
-    const payload = { title: input.title, body: input.action === 'text' ? input.text : '', course: input.course,
+    const noteBody = isLinkAction ? (input.comment ? `${input.url}\n\n${input.comment}` : input.url) : (input.action === 'text' ? input.text : '');
+    const payload = { title: input.title, body: noteBody, course: input.course,
       topic: input.topic, comment: input.comment, source_app: state.source_app || '',
-      source_reference: input.action === 'video' ? input.url : '', source_timestamp: state.source_timestamp, citations };
+      source_reference: isLinkAction ? input.url : '', source_timestamp: state.source_timestamp, citations };
     const note = await api(state.noteId ? 'PUT' : 'POST', state.noteId ? `/notes/${state.noteId}` : '/notes', payload);
     state.noteId = note.id;
-    // Video keeps the confirmed citation only. Text/image retain the selected evidence.
-    if (input.action !== 'video' && !state.attachmentSaved) {
+    // Link keeps the confirmed citation only. Text/image retain the selected evidence.
+    if (!isLinkAction && !state.attachmentSaved) {
       await upload(note.id, 'capture.png', state.image.toPNG());
       state.attachmentSaved = true;
     }
